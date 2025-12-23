@@ -1,0 +1,1127 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Smart Diet AI Generator</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Plus+Jakarta+Sans:wght@600;700;800&display=swap" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    
+    <!-- Firebase SDKs -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, onAuthStateChanged, updateProfile, signInWithCustomToken, sendPasswordResetEmail } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, setDoc, getDoc, onSnapshot, deleteDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // CONFIGURATION LOGIC
+        // 1. Try to get config from environment (for Canvas preview)
+        // 2. Fallback to User's specific config (for local use)
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {
+            apiKey: "AIzaSyDbSQ-ngUPYRCWfIsjj32PkjH4wLwhxyKo",
+            authDomain: "smartdiet-ai-8e4be.firebaseapp.com",
+            projectId: "smartdiet-ai-8e4be",
+            storageBucket: "smartdiet-ai-8e4be.firebasestorage.app",
+            messagingSenderId: "558534826670",
+            appId: "1:558534826670:web:eee6d7e123099cacdcab3f",
+            measurementId: "G-LHGRG7BNLG"
+        };
+        
+        // Use provided app ID or fallback to the project ID for local storage paths
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'smartdiet-ai-8e4be';
+        
+        // Initialize Firebase
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        const db = getFirestore(app);
+
+        // Expose to window for global access
+        window.auth = auth;
+        window.db = db;
+        window.appId = appId;
+        window.signInWithEmail = signInWithEmailAndPassword;
+        window.registerWithEmail = createUserWithEmailAndPassword;
+        window.firebaseSignOut = signOut;
+        window.sendPasswordReset = sendPasswordResetEmail;
+        window.doc = doc;
+        window.setDoc = setDoc;
+        window.getDoc = getDoc;
+        window.deleteDoc = deleteDoc;
+        window.onSnapshot = onSnapshot;
+        window.updateProfile = updateProfile;
+
+        // Initial Auth Check (Canvas specific)
+        const initAuth = async () => {
+             if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                try {
+                    await signInWithCustomToken(auth, __initial_auth_token);
+                } catch (e) {
+                    console.error("Auth Token Error", e);
+                }
+             }
+        };
+        initAuth();
+
+        onAuthStateChanged(auth, (user) => {
+            if (user) {
+                document.getElementById('auth-section').classList.add('hidden');
+                document.getElementById('app-content').classList.remove('hidden');
+                document.getElementById('user-email-display').innerText = user.email || "Користувач";
+                document.getElementById('settings-email').innerText = user.email || "user@example.com";
+                window.currentUser = user;
+                window.loadUserData(); // Trigger data load
+            } else {
+                document.getElementById('app-content').classList.add('hidden');
+                document.getElementById('auth-section').classList.remove('hidden');
+                window.currentUser = null;
+            }
+        });
+    </script>
+
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['Inter', 'sans-serif'],
+                        heading: ['Plus Jakarta Sans', 'sans-serif'],
+                    },
+                    colors: {
+                        emerald: { 50: '#ecfdf5', 100: '#d1fae5', 500: '#10b981', 600: '#059669', 900: '#064e3b' }
+                    },
+                    animation: { 'fade-in-up': 'fadeInUp 0.5s ease-out' },
+                    keyframes: {
+                        fadeInUp: {
+                            '0%': { opacity: '0', transform: 'translateY(10px)' },
+                            '100%': { opacity: '1', transform: 'translateY(0)' },
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        body { background-color: #f8fafc; }
+        .glass-panel { background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(10px); border: 1px solid rgba(255, 255, 255, 0.2); }
+        .custom-checkbox input:checked + div { background-color: #10b981; border-color: #10b981; }
+        .custom-checkbox input:checked + div svg { display: block; }
+        .step-timeline::before { content: ''; position: absolute; top: 0; bottom: 0; left: 15px; width: 2px; background: #e2e8f0; z-index: 0; }
+        
+        @media print {
+            body { background: white; }
+            nav, .no-print, button { display: none !important; }
+            #results-section { display: block !important; }
+            .tab-content { display: block !important; }
+            #content-plan, #content-advice { display: none !important; } 
+        }
+
+        #toast-container { position: fixed; bottom: 20px; right: 20px; z-index: 1000; }
+        .toast { background: #1e293b; color: white; padding: 12px 24px; border-radius: 12px; margin-top: 10px; box-shadow: 0 10px 15px -3px rgba(0,0,0,0.1); transform: translateY(100px); opacity: 0; transition: all 0.3s ease; display: flex; align-items: center; gap: 10px; }
+        .toast.show { transform: translateY(0); opacity: 1; }
+    </style>
+</head>
+<body class="text-slate-800 antialiased selection:bg-emerald-100 selection:text-emerald-900">
+
+    <!-- AUTH SECTION (Visible by default until JS checks auth) -->
+    <div id="auth-section" class="min-h-screen flex items-center justify-center p-4 bg-gradient-to-br from-emerald-50 to-teal-50">
+        <div class="bg-white w-full max-w-md rounded-3xl shadow-2xl p-8 animate-fade-in-up">
+            <div class="text-center mb-8">
+                <div class="w-16 h-16 bg-gradient-to-tr from-emerald-500 to-teal-400 rounded-2xl flex items-center justify-center text-white shadow-lg shadow-emerald-500/30 mx-auto mb-4">
+                    <i class="fas fa-leaf text-3xl"></i>
+                </div>
+                <h2 class="text-2xl font-heading font-bold text-slate-800">SmartDiet AI</h2>
+                <p class="text-slate-500">Ваш персональний нутриціолог</p>
+            </div>
+
+            <!-- Login Form -->
+            <form id="login-form" onsubmit="handleLogin(event)" class="space-y-4">
+                <div>
+                    <label class="block text-sm font-medium text-slate-700 mb-1">Email</label>
+                    <div class="relative">
+                        <i class="fas fa-envelope absolute left-3 top-3.5 text-slate-400"></i>
+                        <input type="email" id="login-email" required class="w-full pl-10 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:border-emerald-500 transition-all" placeholder="name@example.com">
+                    </div>
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-slate-700 mb-1">Пароль</label>
+                    <div class="relative">
+                        <i class="fas fa-lock absolute left-3 top-3.5 text-slate-400"></i>
+                        <input type="password" id="login-password" required class="w-full pl-10 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:border-emerald-500 transition-all" placeholder="••••••••">
+                    </div>
+                </div>
+                <button type="submit" class="w-full bg-emerald-500 hover:bg-emerald-600 text-white font-bold py-3 rounded-xl transition-all shadow-lg shadow-emerald-500/30">
+                    Увійти
+                </button>
+                <div class="text-center mt-4">
+                    <span class="text-slate-500 text-sm">Немає акаунту?</span>
+                    <button type="button" onclick="toggleAuthMode('register')" class="text-emerald-600 font-bold text-sm hover:underline ml-1">Зареєструватися</button>
+                </div>
+            </form>
+
+            <!-- Register Form (Hidden) -->
+            <form id="register-form" onsubmit="handleRegister(event)" class="space-y-4 hidden">
+                <div>
+                    <label class="block text-sm font-medium text-slate-700 mb-1">Email</label>
+                    <div class="relative">
+                        <i class="fas fa-envelope absolute left-3 top-3.5 text-slate-400"></i>
+                        <input type="email" id="reg-email" required class="w-full pl-10 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:border-emerald-500 transition-all" placeholder="name@example.com">
+                    </div>
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-slate-700 mb-1">Пароль (мін. 6 символів)</label>
+                    <div class="relative">
+                        <i class="fas fa-lock absolute left-3 top-3.5 text-slate-400"></i>
+                        <input type="password" id="reg-password" required minlength="6" class="w-full pl-10 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:border-emerald-500 transition-all" placeholder="••••••••">
+                    </div>
+                </div>
+                <button type="submit" class="w-full bg-slate-800 hover:bg-slate-900 text-white font-bold py-3 rounded-xl transition-all shadow-lg">
+                    Створити акаунт
+                </button>
+                <div class="text-center mt-4">
+                    <span class="text-slate-500 text-sm">Вже є акаунт?</span>
+                    <button type="button" onclick="toggleAuthMode('login')" class="text-emerald-600 font-bold text-sm hover:underline ml-1">Увійти</button>
+                </div>
+            </form>
+            
+            <p id="auth-error" class="text-red-500 text-sm text-center mt-4 hidden"></p>
+        </div>
+    </div>
+
+    <!-- APP CONTENT (Hidden until login) -->
+    <div id="app-content" class="hidden">
+        <!-- Navbar -->
+        <nav class="fixed w-full z-50 transition-all duration-300 glass-panel shadow-sm/50 border-b border-slate-200/50">
+            <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+                <div class="flex justify-between items-center h-16">
+                    <div class="flex items-center gap-3">
+                        <div class="w-10 h-10 bg-gradient-to-tr from-emerald-500 to-teal-400 rounded-xl flex items-center justify-center text-white shadow-lg shadow-emerald-500/30">
+                            <i class="fas fa-leaf text-lg"></i>
+                        </div>
+                        <span class="font-heading font-bold text-xl tracking-tight text-slate-800 hidden md:block">SmartDiet<span class="text-emerald-500">.AI</span></span>
+                    </div>
+                    <div class="flex items-center gap-3">
+                        <button onclick="toggleSettings()" class="flex items-center gap-2 text-sm font-medium text-slate-600 hover:text-emerald-600 transition-colors bg-slate-50 hover:bg-emerald-50 px-3 py-2 rounded-lg border border-slate-200">
+                            <i class="fas fa-user-circle text-lg"></i>
+                            <span id="user-email-display" class="hidden sm:inline max-w-[150px] truncate">User</span>
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </nav>
+
+        <!-- Main Content -->
+        <main class="pt-24 pb-12 px-4 sm:px-6">
+            <div class="max-w-5xl mx-auto">
+                
+                <!-- Input Form Section -->
+                <div id="input-section" class="animate-fade-in-up">
+                    <div class="text-center mb-10">
+                        <h1 class="font-heading text-3xl md:text-4xl font-bold text-slate-900 mb-3">Створіть свій ідеальний раціон</h1>
+                        <p class="text-slate-500 text-lg max-w-2xl mx-auto">Вкажіть дані про себе, і ШІ згенерує меню.</p>
+                    </div>
+
+                    <form id="diet-form" onsubmit="handleFormSubmit(event)" class="space-y-6">
+                        <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
+                            <!-- Physiology -->
+                            <div class="lg:col-span-7 space-y-6">
+                                <div class="bg-white rounded-3xl shadow-xl shadow-slate-200/60 p-6 md:p-8 border border-slate-100 relative overflow-hidden group">
+                                    <h3 class="font-heading text-lg font-bold text-slate-800 mb-6 flex items-center gap-2 relative z-10">
+                                        <span class="w-8 h-8 rounded-lg bg-blue-100 text-blue-600 flex items-center justify-center text-sm"><i class="fas fa-user"></i></span>
+                                        Фізіологія
+                                    </h3>
+                                    <div class="grid grid-cols-2 gap-5 mb-5 relative z-10">
+                                        <div class="input-group">
+                                            <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1.5 ml-1">Вік</label>
+                                            <input type="number" id="age" required class="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:border-emerald-500 transition-all" placeholder="30">
+                                        </div>
+                                        <div class="input-group">
+                                            <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1.5 ml-1">Стать</label>
+                                            <select id="gender" class="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:border-emerald-500 transition-all">
+                                                <option value="male">Чоловік</option>
+                                                <option value="female">Жінка</option>
+                                            </select>
+                                        </div>
+                                        <div class="input-group">
+                                            <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1.5 ml-1">Вага (кг)</label>
+                                            <input type="number" id="weight" required class="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:border-emerald-500 transition-all" placeholder="70">
+                                        </div>
+                                        <div class="input-group">
+                                            <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1.5 ml-1">Зріст (см)</label>
+                                            <input type="number" id="height" required class="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:border-emerald-500 transition-all" placeholder="175">
+                                        </div>
+                                    </div>
+                                    <div class="input-group relative z-10">
+                                        <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1.5 ml-1">Активність</label>
+                                        <select id="activity" class="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:border-emerald-500 transition-all">
+                                            <option value="sedentary">Сидячий (офіс, без спорту)</option>
+                                            <option value="moderate">Помірний (тренування 1-3 рази)</option>
+                                            <option value="active">Активний (спорт 4+ разів)</option>
+                                        </select>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Preferences -->
+                            <div class="lg:col-span-5 space-y-6">
+                                <div class="bg-white rounded-3xl shadow-xl shadow-slate-200/60 p-6 md:p-8 border border-slate-100 relative overflow-hidden h-full">
+                                    <h3 class="font-heading text-lg font-bold text-slate-800 mb-6 flex items-center gap-2">
+                                        <span class="w-8 h-8 rounded-lg bg-emerald-100 text-emerald-600 flex items-center justify-center text-sm"><i class="fas fa-sliders-h"></i></span>
+                                        Налаштування
+                                    </h3>
+                                    <div class="space-y-5">
+                                        <div class="input-group">
+                                            <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1.5 ml-1">Мета</label>
+                                            <select id="goal" class="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:border-emerald-500 transition-all">
+                                                <option value="weight_loss">🔥 Схуднення (-15%)</option>
+                                                <option value="maintenance">⚖️ Підтримка ваги</option>
+                                                <option value="muscle_gain">💪 Набір маси (+10%)</option>
+                                            </select>
+                                        </div>
+                                        <div class="grid grid-cols-2 gap-4">
+                                            <div class="input-group">
+                                                <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1.5 ml-1">Бюджет</label>
+                                                <select id="budget" class="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:border-emerald-500 transition-all text-sm">
+                                                    <option value="economical">Економний</option>
+                                                    <option value="medium" selected>Середній</option>
+                                                    <option value="premium">Преміум</option>
+                                                </select>
+                                            </div>
+                                            <div class="input-group">
+                                                <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1.5 ml-1">Час</label>
+                                                <select id="cooking_time" class="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:border-emerald-500 transition-all text-sm">
+                                                    <option value="daily">Щодня</option>
+                                                    <option value="batch">Batch (на 3 дні)</option>
+                                                </select>
+                                            </div>
+                                        </div>
+                                        <div class="input-group">
+                                            <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1.5 ml-1">Люблю ❤️</label>
+                                            <input type="text" id="likes" class="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:border-emerald-500 transition-all text-sm" placeholder="Курка, авокадо...">
+                                        </div>
+                                        <div class="input-group">
+                                            <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1.5 ml-1">Не їм 🚫</label>
+                                            <input type="text" id="dislikes" class="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:border-emerald-500 transition-all text-sm" placeholder="Риба, горіхи...">
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="pt-4 flex justify-center">
+                            <button type="submit" class="group relative inline-flex items-center justify-center px-8 py-4 text-lg font-bold text-white transition-all duration-200 bg-emerald-500 font-heading rounded-2xl hover:bg-emerald-600 hover:shadow-lg hover:shadow-emerald-500/40 focus:outline-none transform hover:-translate-y-1">
+                                <span class="relative flex items-center gap-3">
+                                    <i class="fas fa-magic group-hover:animate-pulse"></i>
+                                    Згенерувати раціон
+                                </span>
+                            </button>
+                        </div>
+                    </form>
+                </div>
+
+                <!-- Loading State -->
+                <div id="loading-section" class="hidden min-h-[400px] flex flex-col items-center justify-center text-center animate-fade-in-up">
+                    <div class="relative w-24 h-24 mb-8">
+                        <div class="absolute inset-0 border-4 border-emerald-100 rounded-full"></div>
+                        <div class="absolute inset-0 border-4 border-emerald-500 rounded-full border-t-transparent animate-spin"></div>
+                        <i class="fas fa-carrot absolute inset-0 flex items-center justify-center text-3xl text-emerald-500 animate-pulse"></i>
+                    </div>
+                    <h3 class="font-heading text-2xl font-bold text-slate-800 mb-2">ШІ створює магію...</h3>
+                    <p class="text-slate-500" id="loading-text">Аналіз метаболізму та вподобань</p>
+                </div>
+
+                <!-- Results Section -->
+                <div id="results-section" class="hidden animate-fade-in-up pb-10">
+                    
+                    <!-- Metrics Grid -->
+                    <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
+                        <div class="bg-white p-5 rounded-2xl shadow-sm border border-slate-100 text-center relative overflow-hidden">
+                            <div class="absolute top-0 left-0 w-full h-1 bg-blue-500"></div>
+                            <p class="text-2xl font-heading font-bold text-slate-800" id="res-calories">0</p>
+                            <p class="text-xs font-semibold text-slate-400 uppercase tracking-wide">ккал/день</p>
+                        </div>
+                        <div class="bg-white p-5 rounded-2xl shadow-sm border border-slate-100 text-center relative overflow-hidden">
+                            <div class="absolute top-0 left-0 w-full h-1 bg-red-500"></div>
+                            <p class="text-2xl font-heading font-bold text-slate-800" id="res-protein">0g</p>
+                            <p class="text-xs font-semibold text-slate-400 uppercase tracking-wide">Білки</p>
+                        </div>
+                        <div class="bg-white p-5 rounded-2xl shadow-sm border border-slate-100 text-center relative overflow-hidden">
+                            <div class="absolute top-0 left-0 w-full h-1 bg-yellow-500"></div>
+                            <p class="text-2xl font-heading font-bold text-slate-800" id="res-fats">0g</p>
+                            <p class="text-xs font-semibold text-slate-400 uppercase tracking-wide">Жири</p>
+                        </div>
+                        <div class="bg-white p-5 rounded-2xl shadow-sm border border-slate-100 text-center relative overflow-hidden">
+                            <div class="absolute top-0 left-0 w-full h-1 bg-emerald-500"></div>
+                            <p class="text-2xl font-heading font-bold text-slate-800" id="res-carbs">0g</p>
+                            <p class="text-xs font-semibold text-slate-400 uppercase tracking-wide">Вуглеводи</p>
+                        </div>
+                    </div>
+
+                    <!-- BMI Visualizer -->
+                    <div class="bg-white p-4 rounded-2xl shadow-sm border border-slate-100 mb-8 flex flex-col md:flex-row items-center gap-4">
+                        <div class="w-full md:w-1/4 text-center md:text-left">
+                            <p class="text-xs text-slate-400 uppercase font-bold mb-1">Ваш ІМТ (BMI)</p>
+                            <p class="text-2xl font-heading font-bold text-slate-800" id="bmi-value">0.0</p>
+                            <p class="text-sm font-medium text-slate-500" id="bmi-label">Норма</p>
+                        </div>
+                        <div class="w-full md:w-3/4 relative pt-2">
+                            <div class="h-4 w-full bg-slate-100 rounded-full overflow-hidden flex text-[8px] font-bold text-white/50">
+                                <div class="h-full bg-blue-300 w-[18.5%] flex items-center justify-center">Low</div>
+                                <div class="h-full bg-emerald-400 w-[26.5%] flex items-center justify-center">Normal</div>
+                                <div class="h-full bg-orange-400 w-[15%] flex items-center justify-center">Over</div>
+                                <div class="h-full bg-red-400 w-[40%] flex items-center justify-center">Obese</div>
+                            </div>
+                            <!-- Marker -->
+                            <div id="bmi-marker" class="absolute top-0 w-1 h-8 bg-slate-800 rounded transition-all duration-1000 shadow-md" style="left: 0%;"></div>
+                        </div>
+                    </div>
+
+                    <!-- Tabs -->
+                    <div class="flex justify-center mb-8 no-print">
+                        <div class="bg-white p-1.5 rounded-2xl shadow-sm border border-slate-200 inline-flex">
+                            <button onclick="switchTab('plan')" id="tab-plan" class="px-6 py-2.5 rounded-xl text-sm font-bold font-heading transition-all duration-200 bg-emerald-500 text-white shadow-md">
+                                <i class="far fa-calendar-alt mr-2"></i>Тиждень
+                            </button>
+                            <button onclick="switchTab('shopping')" id="tab-shopping" class="px-6 py-2.5 rounded-xl text-sm font-bold font-heading transition-all duration-200 text-slate-500 hover:text-slate-800 hover:bg-slate-50">
+                                <i class="fas fa-shopping-basket mr-2"></i>Покупки
+                            </button>
+                            <button onclick="switchTab('advice')" id="tab-advice" class="px-6 py-2.5 rounded-xl text-sm font-bold font-heading transition-all duration-200 text-slate-500 hover:text-slate-800 hover:bg-slate-50">
+                                <i class="fas fa-user-md mr-2"></i>Поради
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Content -->
+                    <div id="content-plan" class="tab-content block animate-fade-in-up">
+                        <div id="plan-container" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6"></div>
+                    </div>
+
+                    <div id="content-shopping" class="tab-content hidden animate-fade-in-up">
+                        <div class="bg-white rounded-3xl shadow-lg shadow-slate-200/50 border border-slate-100 p-8 max-w-3xl mx-auto">
+                            <div class="flex items-center justify-between mb-8 pb-4 border-b border-slate-100">
+                                <h3 class="font-heading text-2xl font-bold text-slate-800">Список покупок</h3>
+                                <button onclick="window.print()" class="text-slate-400 hover:text-emerald-500 transition-colors no-print">
+                                    <i class="fas fa-print text-xl"></i>
+                                </button>
+                            </div>
+                            <div id="shopping-container" class="grid grid-cols-1 md:grid-cols-2 gap-8"></div>
+                        </div>
+                    </div>
+
+                    <div id="content-advice" class="tab-content hidden animate-fade-in-up">
+                        <div class="bg-gradient-to-br from-blue-50 to-indigo-50 rounded-3xl shadow-sm border border-blue-100 p-8 max-w-3xl mx-auto">
+                            <h3 class="font-heading text-xl font-bold text-blue-900 mb-2">Коментар нутриціолога</h3>
+                            <div id="advice-text" class="prose text-blue-800/80 leading-relaxed font-medium"></div>
+                        </div>
+                    </div>
+
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Recipe Modal -->
+    <div id="recipe-modal" class="fixed inset-0 z-[100] hidden" aria-labelledby="modal-title" role="dialog" aria-modal="true">
+        <div class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm transition-opacity opacity-0" id="modal-backdrop"></div>
+        <div class="fixed inset-0 z-10 overflow-y-auto">
+            <div class="flex min-h-full items-end justify-center p-4 text-center sm:items-center sm:p-0">
+                <div class="relative transform overflow-hidden rounded-3xl bg-white text-left shadow-2xl transition-all sm:my-8 sm:w-full sm:max-w-2xl opacity-0 translate-y-4 sm:translate-y-0 sm:scale-95" id="modal-panel">
+                    <div class="bg-emerald-600 h-40 relative overflow-hidden flex items-center justify-center group">
+                         <div class="absolute inset-0 opacity-20 bg-[url('https://www.transparenttextures.com/patterns/food.png')]"></div>
+                         <div class="w-24 h-24 bg-white/20 backdrop-blur-md rounded-full flex items-center justify-center text-white text-4xl shadow-inner"><i class="fas fa-utensils"></i></div>
+                         <button onclick="closeModal()" class="absolute top-4 right-4 text-white/70 hover:text-white bg-black/10 hover:bg-black/20 rounded-full w-8 h-8 flex items-center justify-center transition-all z-20"><i class="fas fa-times"></i></button>
+                    </div>
+                    <div class="px-6 py-6 md:px-8">
+                        <h3 class="text-3xl font-heading font-bold text-slate-900 mb-2 leading-tight" id="modal-title">Страва</h3>
+                        <div class="flex items-center gap-3 mb-6">
+                            <span id="modal-calories" class="inline-flex items-center rounded-full bg-orange-50 px-3 py-1 text-sm font-semibold text-orange-600 ring-1 ring-inset ring-orange-500/20"><i class="fas fa-fire mr-1.5"></i> 0 ккал</span>
+                            <span id="modal-time" class="inline-flex items-center rounded-full bg-blue-50 px-3 py-1 text-sm font-semibold text-blue-600 ring-1 ring-inset ring-blue-500/20 hidden"><i class="far fa-clock mr-1.5"></i> 20 хв</span>
+                        </div>
+                        <div id="modal-loading" class="hidden py-12 text-center">
+                             <i class="fas fa-circle-notch text-emerald-500 text-3xl animate-spin mb-3"></i>
+                             <p class="text-slate-500 font-medium">Шеф пише рецепт...</p>
+                        </div>
+                        <div id="modal-content" class="space-y-8">
+                            <div class="bg-slate-50 rounded-xl p-5 border border-slate-100">
+                                <p id="modal-summary" class="text-slate-700 leading-relaxed font-medium italic"></p>
+                            </div>
+                            <div id="modal-details" class="hidden grid md:grid-cols-1 gap-8 animate-fade-in-up">
+                                <div><h4 class="font-heading font-bold text-lg text-slate-800 mb-4">Інгредієнти</h4><ul id="modal-ingredients" class="grid grid-cols-1 sm:grid-cols-2 gap-3"></ul></div>
+                                <div><h4 class="font-heading font-bold text-lg text-slate-800 mb-4">Приготування</h4><div id="modal-steps" class="space-y-0 relative pl-2 step-timeline"></div></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Settings Modal (UPDATED) -->
+    <div id="settings-modal" class="fixed inset-0 z-[100] hidden" role="dialog" aria-modal="true">
+        <div class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm" onclick="toggleSettings()"></div>
+        <div class="fixed inset-0 z-10 overflow-y-auto">
+            <div class="flex min-h-full items-center justify-center p-4 text-center">
+                <div class="relative bg-white w-full max-w-sm rounded-2xl shadow-xl p-6 text-left animate-fade-in-up">
+                    <div class="flex justify-between items-center mb-6">
+                        <h3 class="text-xl font-heading font-bold text-slate-800">Налаштування</h3>
+                        <button onclick="toggleSettings()" class="text-slate-400 hover:text-slate-600"><i class="fas fa-times"></i></button>
+                    </div>
+                    
+                    <div class="space-y-3">
+                        <div class="bg-slate-50 p-4 rounded-xl border border-slate-100 mb-2">
+                            <p class="text-xs font-bold text-slate-400 uppercase tracking-wide mb-1">Акаунт</p>
+                            <p id="settings-email" class="font-medium text-slate-800 truncate">user@example.com</p>
+                        </div>
+
+                        <!-- NEW: Edit Profile Button -->
+                        <button onclick="editProfile()" class="w-full flex items-center justify-start gap-3 bg-white hover:bg-slate-50 text-slate-700 font-medium py-3 px-4 rounded-xl border border-slate-200 transition-colors">
+                            <div class="w-8 h-8 rounded-lg bg-emerald-100 text-emerald-600 flex items-center justify-center"><i class="fas fa-user-edit"></i></div>
+                            Змінити параметри тіла
+                        </button>
+
+                        <!-- NEW: Reset Password Button -->
+                        <button onclick="handlePasswordReset()" class="w-full flex items-center justify-start gap-3 bg-white hover:bg-slate-50 text-slate-700 font-medium py-3 px-4 rounded-xl border border-slate-200 transition-colors">
+                            <div class="w-8 h-8 rounded-lg bg-blue-100 text-blue-600 flex items-center justify-center"><i class="fas fa-key"></i></div>
+                            Змінити пароль
+                        </button>
+
+                        <div class="h-px bg-slate-100 my-2"></div>
+
+                        <button onclick="fullReset()" class="w-full flex items-center justify-start gap-3 bg-white hover:bg-red-50 text-red-600 font-medium py-3 px-4 rounded-xl border border-slate-200 hover:border-red-100 transition-colors">
+                            <div class="w-8 h-8 rounded-lg bg-red-100 text-red-600 flex items-center justify-center"><i class="fas fa-trash-alt"></i></div>
+                            Видалити історію
+                        </button>
+
+                        <button onclick="handleLogout()" class="w-full flex items-center justify-center gap-2 bg-slate-800 hover:bg-slate-900 text-white font-semibold py-3 rounded-xl transition-colors mt-2">
+                            <i class="fas fa-sign-out-alt"></i> Вийти
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="toast-container"></div>
+
+    <!-- JAVASCRIPT LOGIC -->
+    <script>
+        const apiKey = "AIzaSyD8pwLwm8WzTf0RBwItWFWXD0Fngmp11yY"; 
+        let recipeCache = {};
+        let currentPlan = {}; 
+        let userDataState = {};
+
+        // --- AUTH & FIRESTORE LOGIC ---
+        
+        function toggleAuthMode(mode) {
+            const loginForm = document.getElementById('login-form');
+            const regForm = document.getElementById('register-form');
+            const errorMsg = document.getElementById('auth-error');
+            
+            errorMsg.classList.add('hidden');
+            
+            if (mode === 'register') {
+                loginForm.classList.add('hidden');
+                regForm.classList.remove('hidden');
+            } else {
+                regForm.classList.add('hidden');
+                loginForm.classList.remove('hidden');
+            }
+        }
+
+        async function handleLogin(e) {
+            e.preventDefault();
+            const email = document.getElementById('login-email').value;
+            const password = document.getElementById('login-password').value;
+            const errorMsg = document.getElementById('auth-error');
+
+            try {
+                await window.signInWithEmail(window.auth, email, password);
+                // Success is handled by onAuthStateChanged
+            } catch (error) {
+                errorMsg.innerText = "Невірний email або пароль";
+                errorMsg.classList.remove('hidden');
+                console.error(error);
+            }
+        }
+
+        async function handleRegister(e) {
+            e.preventDefault();
+            const email = document.getElementById('reg-email').value;
+            const password = document.getElementById('reg-password').value;
+            const errorMsg = document.getElementById('auth-error');
+
+            try {
+                await window.registerWithEmail(window.auth, email, password);
+                // Success is handled by onAuthStateChanged
+            } catch (error) {
+                if(error.code === 'auth/email-already-in-use') {
+                    errorMsg.innerText = "Цей email вже зареєстровано";
+                } else if (error.code === 'auth/weak-password') {
+                    errorMsg.innerText = "Пароль занадто слабкий";
+                } else {
+                    errorMsg.innerText = "Помилка реєстрації: " + error.message;
+                }
+                errorMsg.classList.remove('hidden');
+            }
+        }
+
+        async function handleLogout() {
+            try {
+                await window.firebaseSignOut(window.auth);
+                toggleSettings(); // close modal
+            } catch (error) {
+                console.error(error);
+            }
+        }
+        
+        async function handlePasswordReset() {
+            const email = window.currentUser?.email;
+            if(!email) return;
+            if(confirm(`Надіслати лист для скидання пароля на ${email}?`)) {
+                try {
+                    await window.sendPasswordReset(window.auth, email);
+                    showToast("Лист надіслано! Перевірте пошту");
+                    toggleSettings();
+                } catch(e) {
+                    showToast("Помилка: " + e.message);
+                }
+            }
+        }
+
+        function toggleSettings() {
+            const modal = document.getElementById('settings-modal');
+            const emailDisplay = document.getElementById('settings-email');
+            
+            if (modal.classList.contains('hidden')) {
+                emailDisplay.innerText = window.currentUser?.email || "Анонім";
+                modal.classList.remove('hidden');
+            } else {
+                modal.classList.add('hidden');
+            }
+        }
+
+        // NEW: Function to go back to input form
+        function editProfile() {
+            toggleSettings();
+            document.getElementById('results-section').classList.add('hidden');
+            document.getElementById('input-section').classList.remove('hidden');
+            window.scrollTo({top: 0, behavior: 'smooth'});
+            showToast("Відредагуйте дані та натисніть кнопку для оновлення");
+        }
+
+        // --- DATA SYNC ---
+
+        window.loadUserData = function() {
+            if (!window.currentUser) return;
+            const userId = window.currentUser.uid;
+            
+            const userDocRef = window.doc(window.db, 'artifacts', window.appId, 'users', userId, 'data', 'profile');
+            
+            window.onSnapshot(userDocRef, (docSnap) => {
+                if (docSnap.exists()) {
+                    const data = docSnap.data();
+                    userDataState = data.userData;
+                    currentPlan = data.plan;
+                    recipeCache = data.cache || {};
+                    
+                    // Fill inputs (Important for Edit Profile)
+                    if(userDataState) {
+                         document.getElementById('age').value = userDataState.age;
+                         document.getElementById('weight').value = userDataState.weight;
+                         document.getElementById('height').value = userDataState.height;
+                         document.getElementById('gender').value = userDataState.gender;
+                         document.getElementById('activity').value = userDataState.activity;
+                         document.getElementById('goal').value = userDataState.goal;
+                         document.getElementById('budget').value = userDataState.budget;
+                         document.getElementById('cooking_time').value = userDataState.cooking_time;
+                         document.getElementById('likes').value = userDataState.likes;
+                         document.getElementById('dislikes').value = userDataState.dislikes;
+
+                         // Only show results if we are NOT currently editing (simple logic: if results hidden, don't auto-show)
+                         // But for initial load, we want to show results. 
+                         // Check if input-section is hidden, if so, keep it hidden. If input is visible (user clicked edit), don't force result view.
+                         // Actually, standard behavior: show results on load.
+                         const inputSection = document.getElementById('input-section');
+                         if(!inputSection.classList.contains('hidden')) {
+                             // User is editing, do nothing or show toast?
+                             // Let's assume on initial load we show results.
+                             // We can use a flag or check if we just logged in.
+                             // For simplicity: Always update metrics/plan in BG, but only switch view if we are on "Login" phase.
+                         } else {
+                             // Usually we are here.
+                         }
+                         
+                         // Force view switch on initial load logic handles this separately? 
+                         // Let's just update the DOM elements.
+                         const metrics = calculateMetrics(userDataState);
+                         renderMetrics(metrics);
+                         renderBMI(userDataState.weight, userDataState.height);
+                         renderPlan(currentPlan);
+                         renderShoppingList(data.shopping_list);
+                         renderAdvice(data.notes);
+                         
+                         // Auto-switch to results if this is first load
+                         if(document.getElementById('results-section').classList.contains('hidden') && document.getElementById('input-section').classList.contains('hidden') === false) {
+                              // Actually, inputs are visible by default in HTML. 
+                              // If data exists, hide inputs, show results.
+                              // BUT: If user clicked "Edit Profile", inputs are visible. We shouldn't auto-hide them when snapshot updates (rare self-update).
+                              // Simple fix: Check if we have data. If yes, and we haven't manually opened edit (difficult to track without state).
+                              // Let's just do:
+                              document.getElementById('input-section').classList.add('hidden');
+                              document.getElementById('results-section').classList.remove('hidden');
+                         }
+                    }
+                } else {
+                    // New user or no data
+                    document.getElementById('results-section').classList.add('hidden');
+                    document.getElementById('input-section').classList.remove('hidden');
+                }
+            }, (error) => {
+                console.error("Data Load Error:", error);
+                showToast("Помилка завантаження даних");
+            });
+        }
+
+        async function saveToCloud(dataObj) {
+            if (!window.currentUser) return;
+            try {
+                const userId = window.currentUser.uid;
+                const userDocRef = window.doc(window.db, 'artifacts', window.appId, 'users', userId, 'data', 'profile');
+                await window.setDoc(userDocRef, dataObj);
+            } catch (error) {
+                console.error("Save Error:", error);
+                showToast("Помилка збереження в хмару");
+            }
+        }
+
+        // --- CORE MATH ---
+        const calculateBMR = (weight, height, age, gender) => {
+            let baseBMR = (10 * weight) + (6.25 * height) - (5 * age);
+            return gender === 'male' ? baseBMR + 5 : baseBMR - 161;
+        };
+
+        const calculateMetrics = (data) => {
+            const bmr = calculateBMR(data.weight, data.height, data.age, data.gender);
+            const activityMultipliers = { 'sedentary': 1.2, 'moderate': 1.55, 'active': 1.9 };
+            const tdee = bmr * (activityMultipliers[data.activity] || 1.2);
+            let targetCalories = tdee;
+            let proteinPerKg = 1.5;
+
+            if (data.goal === 'weight_loss') {
+                targetCalories = tdee * 0.85;
+                proteinPerKg = 2.0;
+            } else if (data.goal === 'muscle_gain') {
+                targetCalories = tdee * 1.10;
+                proteinPerKg = 2.0;
+            }
+
+            const proteinG = data.weight * proteinPerKg;
+            const fatsG = data.weight * 1.0;
+            const caloriesFromProtein = proteinG * 4;
+            const caloriesFromFats = fatsG * 9;
+            const carbsG = Math.max(0, (targetCalories - caloriesFromProtein - caloriesFromFats) / 4);
+
+            return {
+                bmr: Math.round(bmr),
+                tdee: Math.round(tdee),
+                targetCalories: Math.round(targetCalories),
+                macros: { protein: Math.round(proteinG), fats: Math.round(fatsG), carbs: Math.round(carbsG) }
+            };
+        };
+
+        // --- PROMPTS ---
+        const constructMainPrompt = (metrics, userData) => {
+            let batchInstruction = "";
+            if (userData.cooking_time === 'batch') {
+                batchInstruction = `СТРАТЕГІЯ: Batch Cooking (готуємо раз на 3 дні). Обід Пн=Вт=Ср.`;
+            }
+            return `
+            Ти професійний нутриціолог. Склади меню (JSON).
+            ОБМЕЖЕННЯ:
+            - Калорії: ${metrics.targetCalories} ккал/день
+            - Б/Ж/В: ${metrics.macros.protein}/${metrics.macros.fats}/${metrics.macros.carbs}г
+            - Бюджет: ${userData.budget}
+            - Виключення: ${userData.dislikes}
+            - Любить: ${userData.likes}
+            ${batchInstruction}
+            ФОРМАТ JSON:
+            {
+                "weekly_plan": {
+                    "monday": { "breakfast": {"name":"", "cal":0, "rec":""}, "lunch": {"name":"", "cal":0, "rec":""}, "dinner": {"name":"", "cal":0, "rec":""}, "snack": {"name":"", "cal":0} },
+                    ... (tuesday-sunday)
+                },
+                "shopping_list": {
+                    "Овочі 🥬": ["..."], "М'ясо/Риба 🥩": ["..."], "Бакалія 🍚": ["..."], "Молочка 🧀": ["..."]
+                },
+                "notes": "Порада"
+            }
+            "rec" - це дуже короткий опис (1 речення), наприклад "Запекти курку з овочами".
+            `;
+        };
+
+        const constructRegeneratePrompt = (day, mealType, currentDish, userData) => {
+            return `
+            Ти нутриціолог. Користувач не хоче їсти "${currentDish}" на ${mealType} у ${day}.
+            Запропонуй альтернативу.
+            Вподобання: ${userData.likes}. Виключення: ${userData.dislikes}.
+            Поверни ТІЛЬКИ JSON для цієї однієї страви:
+            {"name": "Нова назва", "cal": 500, "rec": "Короткий опис"}
+            `;
+        }
+
+        const constructRecipePrompt = (dishName, summary) => {
+            return `
+            Ти шеф-кухар. Напиши ДЕТАЛЬНИЙ рецепт для страви: "${dishName}".
+            Контекст: ${summary}.
+            Поверни ТІЛЬКИ JSON:
+            {"time": "20 хв", "ingredients": ["інгредієнт 1", "інгредієнт 2"], "steps": ["крок 1", "крок 2"]}
+            `;
+        };
+
+        // --- HANDLERS ---
+        async function handleFormSubmit(e) {
+            e.preventDefault();
+            recipeCache = {}; 
+            
+            userDataState = {
+                age: parseInt(document.getElementById('age').value),
+                weight: parseInt(document.getElementById('weight').value),
+                height: parseInt(document.getElementById('height').value),
+                gender: document.getElementById('gender').value,
+                activity: document.getElementById('activity').value,
+                goal: document.getElementById('goal').value,
+                budget: document.getElementById('budget').value,
+                cooking_time: document.getElementById('cooking_time').value,
+                likes: document.getElementById('likes').value,
+                dislikes: document.getElementById('dislikes').value
+            };
+
+            document.getElementById('input-section').classList.add('hidden');
+            document.getElementById('loading-section').classList.remove('hidden');
+            window.scrollTo({top: 0, behavior: 'smooth'});
+
+            try {
+                const metrics = calculateMetrics(userDataState);
+                document.getElementById('loading-text').innerText = `Мета: ${metrics.targetCalories} ккал. Складаємо меню...`;
+
+                const prompt = constructMainPrompt(metrics, userDataState);
+                const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { responseMimeType: "application/json" } })
+                });
+
+                const data = await response.json();
+                const jsonPlan = JSON.parse(data.candidates[0].content.parts[0].text);
+                
+                currentPlan = jsonPlan.weekly_plan;
+
+                const fullData = {
+                    userData: userDataState,
+                    plan: currentPlan,
+                    shopping_list: jsonPlan.shopping_list,
+                    notes: jsonPlan.notes,
+                    cache: recipeCache
+                };
+
+                // Save to Cloud
+                await saveToCloud(fullData);
+
+                // UI will be updated by onSnapshot automatically, but we can force render here for speed
+                renderMetrics(metrics);
+                renderBMI(userDataState.weight, userDataState.height);
+                renderPlan(currentPlan);
+                renderShoppingList(jsonPlan.shopping_list);
+                renderAdvice(jsonPlan.notes);
+
+                document.getElementById('loading-section').classList.add('hidden');
+                document.getElementById('results-section').classList.remove('hidden');
+
+            } catch (error) {
+                console.error(error);
+                showToast("Помилка генерації. Спробуйте ще раз.");
+                // Reset manually as fallback
+                document.getElementById('loading-section').classList.add('hidden');
+                document.getElementById('input-section').classList.remove('hidden');
+            }
+        }
+
+        // --- NEW: REGENERATE SINGLE MEAL ---
+        async function regenerateMeal(day, type, currentName) {
+            const btn = document.getElementById(`btn-${day}-${type}`);
+            const originalIcon = btn.innerHTML;
+            btn.innerHTML = '<i class="fas fa-spin fa-spinner"></i>';
+            btn.disabled = true;
+
+            try {
+                const prompt = constructRegeneratePrompt(day, type, currentName, userDataState);
+                const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { responseMimeType: "application/json" } })
+                });
+                
+                const data = await response.json();
+                const newMeal = JSON.parse(data.candidates[0].content.parts[0].text);
+                
+                currentPlan[day][type] = newMeal;
+                
+                // Update Cloud
+                const fullData = {
+                    userData: userDataState,
+                    plan: currentPlan,
+                    shopping_list: document.shoppingListCache || {}, // Need to persist list properly
+                    notes: document.notesCache || "",
+                    cache: recipeCache
+                };
+                
+                // Fetch existing to not overwrite shopping list if not in memory scope perfectly (simplified for this demo)
+                // Better approach: just update the specific field if possible, or resave full state
+                await saveToCloud(fullData);
+
+                showToast(`Страву оновлено: ${newMeal.name}`);
+
+            } catch (e) {
+                console.error(e);
+                showToast("Не вдалося замінити страву");
+            } finally {
+                btn.innerHTML = originalIcon;
+                btn.disabled = false;
+            }
+        }
+
+        // --- RENDER LOGIC ---
+        function renderMetrics(metrics) {
+            document.getElementById('res-calories').innerText = metrics.targetCalories;
+            document.getElementById('res-protein').innerText = metrics.macros.protein + 'g';
+            document.getElementById('res-fats').innerText = metrics.macros.fats + 'g';
+            document.getElementById('res-carbs').innerText = metrics.macros.carbs + 'g';
+        }
+
+        function renderBMI(weight, height) {
+            const bmi = (weight / ((height/100) ** 2)).toFixed(1);
+            document.getElementById('bmi-value').innerText = bmi;
+            
+            let label = "Норма";
+            let colorClass = "text-emerald-500";
+            let pos = 0;
+
+            if (bmi < 18.5) { 
+                label = "Недостатня вага"; colorClass = "text-blue-500"; 
+                pos = Math.min(18, (bmi / 18.5) * 18);
+            }
+            else if (bmi < 25) { 
+                label = "Норма"; colorClass = "text-emerald-500"; 
+                pos = 18.5 + ((bmi - 18.5) / 6.5) * 26.5; 
+            }
+            else if (bmi < 30) { 
+                label = "Надмірна вага"; colorClass = "text-orange-500"; 
+                pos = 45 + ((bmi - 25) / 5) * 15;
+            }
+            else { 
+                label = "Ожиріння"; colorClass = "text-red-500"; 
+                pos = 60 + Math.min(40, ((bmi - 30) / 10) * 40);
+            }
+
+            const labelEl = document.getElementById('bmi-label');
+            labelEl.innerText = label;
+            labelEl.className = `text-sm font-medium ${colorClass}`;
+            document.getElementById('bmi-marker').style.left = `${pos}%`;
+        }
+
+        const dayNames = { "monday": "Понеділок", "tuesday": "Вівторок", "wednesday": "Середа", "thursday": "Четвер", "friday": "П'ятниця", "saturday": "Субота", "sunday": "Неділя" };
+
+        function renderPlan(plan) {
+            const container = document.getElementById('plan-container');
+            container.innerHTML = '';
+
+            for (const [dayKey, dayData] of Object.entries(plan)) {
+                const card = document.createElement('div');
+                card.className = 'bg-white rounded-3xl shadow-sm hover:shadow-xl hover:-translate-y-1 transition-all duration-300 overflow-hidden border border-slate-100 flex flex-col h-full';
+                const isWeekend = dayKey === 'saturday' || dayKey === 'sunday';
+                const headerColor = isWeekend ? 'bg-orange-50 text-orange-800' : 'bg-emerald-50 text-emerald-800';
+                
+                card.innerHTML = `
+                    <div class="${headerColor} px-6 py-3 border-b border-black/5 flex justify-between items-center">
+                        <h3 class="font-heading font-bold">${dayNames[dayKey] || dayKey}</h3>
+                    </div>
+                    <div class="p-5 space-y-4 flex-grow">
+                        ${renderMealRow('Сніданок', 'sun text-amber-500', dayData.breakfast, dayKey, 'breakfast')}
+                        ${renderMealRow('Обід', 'utensils text-emerald-500', dayData.lunch, dayKey, 'lunch')}
+                        ${renderMealRow('Вечеря', 'moon text-indigo-500', dayData.dinner, dayKey, 'dinner')}
+                        ${dayData.snack ? renderMealRow('Перекус', 'cookie-bite text-slate-400', dayData.snack, dayKey, 'snack') : ''}
+                    </div>
+                `;
+                container.appendChild(card);
+            }
+        }
+
+        function renderMealRow(label, iconClass, meal, dayKey, mealType) {
+            if (!meal) return '';
+            const safeRecipe = meal.rec ? meal.rec.replace(/"/g, '&quot;') : '';
+            const safeName = meal.name ? meal.name.replace(/"/g, '&quot;') : '';
+            const calories = meal.cal || meal.calories || 0;
+
+            return `
+                <div class="group relative p-3 rounded-2xl hover:bg-slate-50 transition-colors border border-transparent hover:border-slate-100">
+                    <div class="cursor-pointer" onclick='openRecipe("${safeName}", "${safeRecipe}", ${calories})'>
+                        <div class="flex items-center gap-2 mb-1.5">
+                            <i class="fas fa-${iconClass} text-xs"></i>
+                            <span class="text-[10px] font-bold text-slate-400 uppercase tracking-widest">${label}</span>
+                        </div>
+                        <p class="text-sm font-semibold text-slate-800 leading-snug group-hover:text-emerald-600 transition-colors line-clamp-2 pr-6">${meal.name}</p>
+                        <p class="text-xs text-slate-400 mt-1 font-medium">${calories} ккал</p>
+                    </div>
+                    <button id="btn-${dayKey}-${mealType}" onclick="regenerateMeal('${dayKey}', '${mealType}', '${safeName}')" class="absolute top-2 right-2 text-slate-300 hover:text-blue-500 p-1 rounded-full hover:bg-blue-50 transition-colors opacity-0 group-hover:opacity-100" title="Замінити страву">
+                        <i class="fas fa-sync-alt text-xs"></i>
+                    </button>
+                </div>
+            `;
+        }
+
+        function renderShoppingList(list) {
+            document.shoppingListCache = list; // Cache for save
+            const container = document.getElementById('shopping-container');
+            container.innerHTML = '';
+            for (const [category, items] of Object.entries(list)) {
+                if (!items || items.length === 0) continue;
+                const catBlock = document.createElement('div');
+                catBlock.innerHTML = `
+                    <h4 class="font-heading font-bold text-slate-700 mb-4 pb-2 border-b border-slate-100 flex items-center justify-between">
+                        ${category} <span class="text-xs font-normal text-slate-400 bg-slate-50 px-2 py-1 rounded-full no-print">${items.length}</span>
+                    </h4>
+                    <div class="space-y-3">
+                        ${items.map(item => `
+                            <label class="custom-checkbox flex items-start gap-3 cursor-pointer group">
+                                <input type="checkbox" class="hidden peer">
+                                <div class="w-5 h-5 rounded-md border-2 border-slate-300 peer-checked:bg-emerald-500 peer-checked:border-emerald-500 flex items-center justify-center transition-all mt-0.5 flex-shrink-0 group-hover:border-emerald-400 no-print">
+                                    <svg class="w-3 h-3 text-white hidden pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7"></path></svg>
+                                </div>
+                                <span class="text-sm text-slate-600 font-medium peer-checked:text-slate-400 peer-checked:line-through transition-colors select-none">${item}</span>
+                            </label>
+                        `).join('')}
+                    </div>
+                `;
+                container.appendChild(catBlock);
+            }
+        }
+
+        function renderAdvice(text) { 
+            document.notesCache = text;
+            document.getElementById('advice-text').innerText = text || "Дотримуйтесь водного балансу."; 
+        }
+
+        function switchTab(tabId) {
+            document.querySelectorAll('.tab-content').forEach(el => el.classList.add('hidden'));
+            ['plan', 'shopping', 'advice'].forEach(id => {
+                const btn = document.getElementById(`tab-${id}`);
+                btn.className = "px-6 py-2.5 rounded-xl text-sm font-bold font-heading transition-all duration-200 text-slate-500 hover:text-slate-800 hover:bg-slate-50";
+            });
+            document.getElementById(`content-${tabId}`).classList.remove('hidden');
+            document.getElementById(`tab-${tabId}`).className = "px-6 py-2.5 rounded-xl text-sm font-bold font-heading transition-all duration-200 bg-emerald-500 text-white shadow-md shadow-emerald-500/30";
+        }
+
+        // --- MODAL LOGIC ---
+        async function fetchFullRecipe(dishName, summary) {
+            try {
+                const prompt = constructRecipePrompt(dishName, summary);
+                const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { responseMimeType: "application/json" } })
+                });
+                return JSON.parse((await response.json()).candidates[0].content.parts[0].text);
+            } catch (e) { return null; }
+        }
+
+        async function openRecipe(name, summary, calories) {
+            document.getElementById('modal-title').innerText = name;
+            document.getElementById('modal-summary').innerText = summary || "Завантаження опису...";
+            document.getElementById('modal-calories').innerHTML = `<i class="fas fa-fire mr-1.5"></i> ${calories} ккал`;
+            document.getElementById('modal-time').classList.add('hidden');
+            document.getElementById('modal-details').classList.add('hidden');
+            document.getElementById('recipe-modal').classList.remove('hidden');
+            
+            setTimeout(() => {
+                document.getElementById('modal-backdrop').classList.remove('opacity-0');
+                const panel = document.getElementById('modal-panel');
+                panel.classList.remove('opacity-0', 'translate-y-4', 'sm:translate-y-0', 'sm:scale-95');
+                panel.classList.add('opacity-100', 'translate-y-0', 'sm:scale-100');
+            }, 10);
+
+            if (recipeCache[name]) { renderFullRecipe(recipeCache[name]); } 
+            else {
+                document.getElementById('modal-loading').classList.remove('hidden');
+                const detailedRecipe = await fetchFullRecipe(name, summary);
+                if (detailedRecipe) {
+                    recipeCache[name] = detailedRecipe;
+                    
+                    // Auto-save cache to cloud silently
+                    if(window.currentUser) {
+                        const fullData = {
+                            userData: userDataState,
+                            plan: currentPlan,
+                            shopping_list: document.shoppingListCache,
+                            notes: document.notesCache,
+                            cache: recipeCache
+                        };
+                        saveToCloud(fullData);
+                    }
+
+                    renderFullRecipe(detailedRecipe);
+                } else {
+                    document.getElementById('modal-loading').classList.add('hidden');
+                    document.getElementById('modal-summary').innerText += "\n(Детальний рецепт наразі недоступний)";
+                }
+            }
+        }
+
+        function renderFullRecipe(recipeData) {
+            document.getElementById('modal-loading').classList.add('hidden');
+            document.getElementById('modal-details').classList.remove('hidden');
+            if (recipeData.time) {
+                const timeEl = document.getElementById('modal-time');
+                timeEl.innerHTML = `<i class="far fa-clock mr-1.5"></i> ${recipeData.time}`;
+                timeEl.classList.remove('hidden');
+            }
+            document.getElementById('modal-ingredients').innerHTML = recipeData.ingredients.map(ing => `<li class="flex items-start gap-2 text-sm text-slate-700 bg-slate-50 p-2 rounded-lg border border-slate-100"><i class="fas fa-check-circle text-emerald-400 mt-0.5"></i><span>${ing}</span></li>`).join('');
+            document.getElementById('modal-steps').innerHTML = recipeData.steps.map((step, idx) => `<div class="relative pl-8 pb-6 group last:pb-0"><div class="absolute left-0 top-0 w-8 h-8 bg-white border-2 border-slate-200 text-slate-400 rounded-full flex items-center justify-center font-bold text-sm group-hover:border-emerald-500 group-hover:text-emerald-500 transition-colors z-10">${idx + 1}</div><p class="text-slate-700 leading-relaxed text-sm md:text-base pt-1">${step}</p></div>`).join('');
+        }
+
+        function closeModal() {
+            const panel = document.getElementById('modal-panel');
+            panel.classList.remove('opacity-100', 'translate-y-0', 'sm:scale-100');
+            panel.classList.add('opacity-0', 'translate-y-4', 'sm:translate-y-0', 'sm:scale-95');
+            document.getElementById('modal-backdrop').classList.add('opacity-0');
+            setTimeout(() => {
+                document.getElementById('recipe-modal').classList.add('hidden');
+                document.getElementById('modal-loading').classList.add('hidden');
+                document.getElementById('modal-details').classList.add('hidden');
+            }, 300);
+        }
+
+        async function fullReset() {
+            if(confirm("Це очистить ваші дані в хмарі. Ви впевнені?")) {
+                toggleSettings(); // Close modal
+                // await window.deleteDoc(userDocRef); // Keep doc, just reset local UI
+                document.getElementById('results-section').classList.add('hidden');
+                document.getElementById('input-section').classList.remove('hidden');
+                window.scrollTo({top: 0, behavior: 'smooth'});
+            }
+        }
+
+        function showToast(message) {
+            const container = document.getElementById('toast-container');
+            const toast = document.createElement('div');
+            toast.className = 'toast';
+            toast.innerHTML = `<i class="fas fa-info-circle text-emerald-400"></i> ${message}`;
+            container.appendChild(toast);
+            setTimeout(() => toast.classList.add('show'), 100);
+            setTimeout(() => {
+                toast.classList.remove('show');
+                setTimeout(() => toast.remove(), 300);
+            }, 3000);
+        }
+    </script>
+</body>
+</html>
