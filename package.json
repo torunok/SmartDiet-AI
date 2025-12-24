@@ -1,0 +1,32 @@
+{
+  "name": "smart-diet-ai-generator",
+  "version": "1.0.0",
+  "description": "AI-powered meal planning generator with Firebase backend",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "serve": "vite preview --port 5000",
+    "server": "node server.js",
+    "server:dev": "node --watch server.js"
+  },
+  "keywords": [
+    "diet",
+    "meal-planning",
+    "ai",
+    "nutrition",
+    "firebase"
+  ],
+  "author": "SmartDiet Team",
+  "license": "MIT",
+  "devDependencies": {
+    "vite": "^5.0.0"
+  },
+  "dependencies": {
+    "firebase": "^11.6.1",
+    "express": "^4.18.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.0.0"
+  }
+}
