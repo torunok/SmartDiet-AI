@@ -12,12 +12,10 @@
     <!-- Firebase SDKs -->
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, onAuthStateChanged, updateProfile, signInWithCustomToken, sendPasswordResetEmail } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, onAuthStateChanged, updateProfile, signInWithCustomToken, signInAnonymously, sendPasswordResetEmail, setPersistence, browserLocalPersistence } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { getFirestore, doc, setDoc, getDoc, onSnapshot, deleteDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
         // CONFIGURATION LOGIC
-        // 1. Try to get config from environment (for Canvas preview)
-        // 2. Fallback to User's specific config (for local use)
         const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {
             apiKey: "AIzaSyDbSQ-ngUPYRCWfIsjj32PkjH4wLwhxyKo",
             authDomain: "smartdiet-ai-8e4be.firebaseapp.com",
@@ -28,13 +26,19 @@
             measurementId: "G-LHGRG7BNLG"
         };
         
-        // Use provided app ID or fallback to the project ID for local storage paths
+        // Use provided app ID or fallback
         const appId = typeof __app_id !== 'undefined' ? __app_id : 'smartdiet-ai-8e4be';
+        
+        // Check if running in Canvas environment (for auto-login logic)
+        const isCanvas = typeof __initial_auth_token !== 'undefined' && __initial_auth_token;
         
         // Initialize Firebase
         const app = initializeApp(firebaseConfig);
         const auth = getAuth(app);
         const db = getFirestore(app);
+
+        // Persistence: Try to keep user logged in
+        setPersistence(auth, browserLocalPersistence).catch(console.error);
 
         // Expose to window for global access
         window.auth = auth;
@@ -51,15 +55,17 @@
         window.onSnapshot = onSnapshot;
         window.updateProfile = updateProfile;
 
-        // Initial Auth Check (Canvas specific)
+        // AUTH INITIALIZATION
         const initAuth = async () => {
-             if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+             if (isCanvas) {
+                // In Canvas: Use the secure token.
                 try {
                     await signInWithCustomToken(auth, __initial_auth_token);
                 } catch (e) {
                     console.error("Auth Token Error", e);
                 }
              }
+             // Local/Phone: Do nothing, let user use the form
         };
         initAuth();
 
@@ -69,8 +75,10 @@
                 document.getElementById('app-content').classList.remove('hidden');
                 document.getElementById('user-email-display').innerText = user.email || "Користувач";
                 document.getElementById('settings-email').innerText = user.email || "user@example.com";
+                
                 window.currentUser = user;
-                window.loadUserData(); // Trigger data load
+                // Defer load slightly to ensure auth state is settled
+                setTimeout(() => window.loadUserData(), 200); 
             } else {
                 document.getElementById('app-content').classList.add('hidden');
                 document.getElementById('auth-section').classList.remove('hidden');
@@ -144,7 +152,11 @@
                     </div>
                 </div>
                 <div>
-                    <label class="block text-sm font-medium text-slate-700 mb-1">Пароль</label>
+                    <div class="flex justify-between items-center mb-1">
+                        <label class="block text-sm font-medium text-slate-700">Пароль</label>
+                        <!-- Forgot Password Link -->
+                        <button type="button" onclick="toggleAuthMode('forgot')" class="text-xs font-bold text-emerald-600 hover:text-emerald-700 hover:underline">Забули пароль?</button>
+                    </div>
                     <div class="relative">
                         <i class="fas fa-lock absolute left-3 top-3.5 text-slate-400"></i>
                         <input type="password" id="login-password" required class="w-full pl-10 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:border-emerald-500 transition-all" placeholder="••••••••">
@@ -183,8 +195,32 @@
                     <button type="button" onclick="toggleAuthMode('login')" class="text-emerald-600 font-bold text-sm hover:underline ml-1">Увійти</button>
                 </div>
             </form>
+
+            <!-- Forgot Password Form (Hidden) -->
+            <form id="forgot-form" onsubmit="handleForgotPassword(event)" class="space-y-4 hidden">
+                <div class="text-center mb-4">
+                    <h3 class="text-lg font-bold text-slate-800">Відновлення пароля</h3>
+                    <p class="text-sm text-slate-500">Введіть email, і ми надішлемо інструкції</p>
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-slate-700 mb-1">Email</label>
+                    <div class="relative">
+                        <i class="fas fa-envelope absolute left-3 top-3.5 text-slate-400"></i>
+                        <input type="email" id="forgot-email" required class="w-full pl-10 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:border-emerald-500 transition-all" placeholder="name@example.com">
+                    </div>
+                </div>
+                <button type="submit" class="w-full bg-blue-500 hover:bg-blue-600 text-white font-bold py-3 rounded-xl transition-all shadow-lg">
+                    Надіслати лист
+                </button>
+                <div class="text-center mt-4">
+                    <button type="button" onclick="toggleAuthMode('login')" class="text-slate-500 hover:text-slate-800 text-sm hover:underline flex items-center justify-center gap-2 w-full">
+                        <i class="fas fa-arrow-left"></i> Назад до входу
+                    </button>
+                </div>
+            </form>
             
             <p id="auth-error" class="text-red-500 text-sm text-center mt-4 hidden"></p>
+            <p id="auth-success" class="text-emerald-500 text-sm text-center mt-4 hidden"></p>
         </div>
     </div>
 
@@ -308,7 +344,13 @@
                             </div>
                         </div>
 
-                        <div class="pt-4 flex justify-center">
+                        <div class="pt-4 flex justify-center gap-4">
+                            <button type="button" onclick="cancelEdit()" id="cancel-btn" class="hidden group relative inline-flex items-center justify-center px-8 py-4 text-lg font-bold text-slate-700 transition-all duration-200 bg-slate-200 font-heading rounded-2xl hover:bg-slate-300 hover:shadow-lg hover:shadow-slate-200/40 focus:outline-none transform hover:-translate-y-1">
+                                <span class="relative flex items-center gap-3">
+                                    <i class="fas fa-times group-hover:animate-pulse"></i>
+                                    Скасувати
+                                </span>
+                            </button>
                             <button type="submit" class="group relative inline-flex items-center justify-center px-8 py-4 text-lg font-bold text-white transition-all duration-200 bg-emerald-500 font-heading rounded-2xl hover:bg-emerald-600 hover:shadow-lg hover:shadow-emerald-500/40 focus:outline-none transform hover:-translate-y-1">
                                 <span class="relative flex items-center gap-3">
                                     <i class="fas fa-magic group-hover:animate-pulse"></i>
@@ -373,6 +415,32 @@
                             </div>
                             <!-- Marker -->
                             <div id="bmi-marker" class="absolute top-0 w-1 h-8 bg-slate-800 rounded transition-all duration-1000 shadow-md" style="left: 0%;"></div>
+                        </div>
+                    </div>
+
+                    <!-- Water Tracker Widget -->
+                    <div class="bg-blue-50 p-6 rounded-3xl shadow-sm border border-blue-100 mb-8 flex flex-col sm:flex-row items-center justify-between gap-6 animate-fade-in-up">
+                        <div class="flex items-center gap-4">
+                            <div class="w-12 h-12 bg-blue-100 text-blue-500 rounded-xl flex items-center justify-center text-xl shadow-sm">
+                                <i class="fas fa-tint"></i>
+                            </div>
+                            <div class="text-center sm:text-left">
+                                <h3 class="font-heading font-bold text-slate-800 text-lg">Водний баланс</h3>
+                                <p class="text-sm text-slate-500">Ваша мета: 8 склянок на день</p>
+                            </div>
+                        </div>
+                        
+                        <div class="flex items-center gap-4 bg-white px-4 py-2 rounded-xl shadow-sm border border-blue-100">
+                            <button onclick="updateWater(-1)" class="w-10 h-10 rounded-lg bg-slate-100 text-slate-400 hover:bg-slate-200 flex items-center justify-center transition-colors">
+                                <i class="fas fa-minus"></i>
+                            </button>
+                            <div class="flex flex-col items-center w-12">
+                                <span id="water-count" class="font-heading font-bold text-2xl text-blue-600">0</span>
+                                <span class="text-[10px] text-slate-400 font-bold uppercase">скл</span>
+                            </div>
+                            <button onclick="updateWater(1)" class="w-10 h-10 rounded-lg bg-blue-500 text-white hover:bg-blue-600 shadow-md shadow-blue-500/30 flex items-center justify-center transition-colors">
+                                <i class="fas fa-plus"></i>
+                            </button>
                         </div>
                     </div>
 
@@ -456,7 +524,7 @@
         </div>
     </div>
 
-    <!-- Settings Modal (UPDATED) -->
+    <!-- Settings Modal -->
     <div id="settings-modal" class="fixed inset-0 z-[100] hidden" role="dialog" aria-modal="true">
         <div class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm" onclick="toggleSettings()"></div>
         <div class="fixed inset-0 z-10 overflow-y-auto">
@@ -473,13 +541,11 @@
                             <p id="settings-email" class="font-medium text-slate-800 truncate">user@example.com</p>
                         </div>
 
-                        <!-- NEW: Edit Profile Button -->
                         <button onclick="editProfile()" class="w-full flex items-center justify-start gap-3 bg-white hover:bg-slate-50 text-slate-700 font-medium py-3 px-4 rounded-xl border border-slate-200 transition-colors">
                             <div class="w-8 h-8 rounded-lg bg-emerald-100 text-emerald-600 flex items-center justify-center"><i class="fas fa-user-edit"></i></div>
                             Змінити параметри тіла
                         </button>
 
-                        <!-- NEW: Reset Password Button -->
                         <button onclick="handlePasswordReset()" class="w-full flex items-center justify-start gap-3 bg-white hover:bg-slate-50 text-slate-700 font-medium py-3 px-4 rounded-xl border border-slate-200 transition-colors">
                             <div class="w-8 h-8 rounded-lg bg-blue-100 text-blue-600 flex items-center justify-center"><i class="fas fa-key"></i></div>
                             Змінити пароль
@@ -492,7 +558,7 @@
                             Видалити історію
                         </button>
 
-                        <button onclick="handleLogout()" class="w-full flex items-center justify-center gap-2 bg-slate-800 hover:bg-slate-900 text-white font-semibold py-3 rounded-xl transition-colors mt-2">
+                        <button id="logout-btn" onclick="handleLogout()" class="w-full flex items-center justify-center gap-2 bg-slate-800 hover:bg-slate-900 text-white font-semibold py-3 rounded-xl transition-colors mt-2">
                             <i class="fas fa-sign-out-alt"></i> Вийти
                         </button>
                     </div>
@@ -509,21 +575,32 @@
         let recipeCache = {};
         let currentPlan = {}; 
         let userDataState = {};
+        let lastShoppingList = null; // Cache for shopping list to prevent unnecessary re-renders
 
         // --- AUTH & FIRESTORE LOGIC ---
         
         function toggleAuthMode(mode) {
             const loginForm = document.getElementById('login-form');
             const regForm = document.getElementById('register-form');
+            const forgotForm = document.getElementById('forgot-form'); // FIX: New form
+            
             const errorMsg = document.getElementById('auth-error');
+            const successMsg = document.getElementById('auth-success');
             
             errorMsg.classList.add('hidden');
+            successMsg.classList.add('hidden');
             
+            // Hide all first
+            loginForm.classList.add('hidden');
+            regForm.classList.add('hidden');
+            forgotForm.classList.add('hidden');
+
+            // Show selected
             if (mode === 'register') {
-                loginForm.classList.add('hidden');
                 regForm.classList.remove('hidden');
+            } else if (mode === 'forgot') {
+                forgotForm.classList.remove('hidden');
             } else {
-                regForm.classList.add('hidden');
                 loginForm.classList.remove('hidden');
             }
         }
@@ -536,7 +613,7 @@
 
             try {
                 await window.signInWithEmail(window.auth, email, password);
-                // Success is handled by onAuthStateChanged
+                // Persistence handled by setPersistence logic
             } catch (error) {
                 errorMsg.innerText = "Невірний email або пароль";
                 errorMsg.classList.remove('hidden');
@@ -552,7 +629,6 @@
 
             try {
                 await window.registerWithEmail(window.auth, email, password);
-                // Success is handled by onAuthStateChanged
             } catch (error) {
                 if(error.code === 'auth/email-already-in-use') {
                     errorMsg.innerText = "Цей email вже зареєстровано";
@@ -560,6 +636,34 @@
                     errorMsg.innerText = "Пароль занадто слабкий";
                 } else {
                     errorMsg.innerText = "Помилка реєстрації: " + error.message;
+                }
+                errorMsg.classList.remove('hidden');
+            }
+        }
+        
+        // FIX: Handle Forgot Password Logic for unauthenticated users
+        async function handleForgotPassword(e) {
+            e.preventDefault();
+            const email = document.getElementById('forgot-email').value;
+            const errorMsg = document.getElementById('auth-error');
+            const successMsg = document.getElementById('auth-success');
+            
+            errorMsg.classList.add('hidden');
+            successMsg.classList.add('hidden');
+
+            try {
+                await window.sendPasswordReset(window.auth, email);
+                successMsg.innerText = `Інструкції надіслано на ${email}. Перевірте пошту (і спам).`;
+                successMsg.classList.remove('hidden');
+                // Optional: switch back to login after few seconds?
+                // toggleAuthMode('login'); 
+            } catch (error) {
+                if (error.code === 'auth/user-not-found') {
+                    errorMsg.innerText = "Користувача з таким email не знайдено";
+                } else if (error.code === 'auth/invalid-email') {
+                    errorMsg.innerText = "Невірний формат email";
+                } else {
+                    errorMsg.innerText = "Помилка: " + error.message;
                 }
                 errorMsg.classList.remove('hidden');
             }
@@ -574,6 +678,7 @@
             }
         }
         
+        // Logic for logged-in user resetting password via settings
         async function handlePasswordReset() {
             const email = window.currentUser?.email;
             if(!email) return;
@@ -600,13 +705,24 @@
             }
         }
 
-        // NEW: Function to go back to input form
+        // Function to go back to input form
         function editProfile() {
             toggleSettings();
             document.getElementById('results-section').classList.add('hidden');
             document.getElementById('input-section').classList.remove('hidden');
+            document.getElementById('cancel-btn').classList.remove('hidden');
             window.scrollTo({top: 0, behavior: 'smooth'});
             showToast("Відредагуйте дані та натисніть кнопку для оновлення");
+        }
+
+        // Function to cancel editing and return to results
+        function cancelEdit() {
+            // Check if there's any data to return to
+            if (Object.keys(currentPlan).length === 0) return; 
+
+            document.getElementById('input-section').classList.add('hidden');
+            document.getElementById('results-section').classList.remove('hidden');
+            window.scrollTo({top: 0, behavior: 'smooth'});
         }
 
         // --- DATA SYNC ---
@@ -615,6 +731,7 @@
             if (!window.currentUser) return;
             const userId = window.currentUser.uid;
             
+            // Reverting to 'data' collection to fix permissions
             const userDocRef = window.doc(window.db, 'artifacts', window.appId, 'users', userId, 'data', 'profile');
             
             window.onSnapshot(userDocRef, (docSnap) => {
@@ -637,36 +754,33 @@
                          document.getElementById('likes').value = userDataState.likes;
                          document.getElementById('dislikes').value = userDataState.dislikes;
 
-                         // Only show results if we are NOT currently editing (simple logic: if results hidden, don't auto-show)
-                         // But for initial load, we want to show results. 
-                         // Check if input-section is hidden, if so, keep it hidden. If input is visible (user clicked edit), don't force result view.
-                         // Actually, standard behavior: show results on load.
                          const inputSection = document.getElementById('input-section');
-                         if(!inputSection.classList.contains('hidden')) {
-                             // User is editing, do nothing or show toast?
-                             // Let's assume on initial load we show results.
-                             // We can use a flag or check if we just logged in.
-                             // For simplicity: Always update metrics/plan in BG, but only switch view if we are on "Login" phase.
-                         } else {
-                             // Usually we are here.
-                         }
                          
-                         // Force view switch on initial load logic handles this separately? 
-                         // Let's just update the DOM elements.
+                         // Always update DOM
                          const metrics = calculateMetrics(userDataState);
                          renderMetrics(metrics);
                          renderBMI(userDataState.weight, userDataState.height);
                          renderPlan(currentPlan);
-                         renderShoppingList(data.shopping_list);
+                         
+                         // Only re-render shopping list if it actually changed (not just shopping_status)
+                         const shoppingListJSON = JSON.stringify(data.shopping_list);
+                         if (lastShoppingList !== shoppingListJSON) {
+                             console.log('Shopping list changed, re-rendering...');
+                             lastShoppingList = shoppingListJSON;
+                             renderShoppingList(data.shopping_list);
+                         } else {
+                             console.log('Shopping list unchanged, skipping re-render (only shopping_status changed)');
+                         }
+                         
                          renderAdvice(data.notes);
                          
-                         // Auto-switch to results if this is first load
-                         if(document.getElementById('results-section').classList.contains('hidden') && document.getElementById('input-section').classList.contains('hidden') === false) {
-                              // Actually, inputs are visible by default in HTML. 
-                              // If data exists, hide inputs, show results.
-                              // BUT: If user clicked "Edit Profile", inputs are visible. We shouldn't auto-hide them when snapshot updates (rare self-update).
-                              // Simple fix: Check if we have data. If yes, and we haven't manually opened edit (difficult to track without state).
-                              // Let's just do:
+                         // Update water count
+                         const waterCount = userDataState.water || 0;
+                         document.getElementById('water-count').innerText = waterCount;
+                         
+                         // If we are currently on the input screen (fresh load), switch to results
+                         // BUT check if inputSection is hidden to avoid auto-switching while editing
+                         if(document.getElementById('results-section').classList.contains('hidden') && !inputSection.classList.contains('hidden')) {
                               document.getElementById('input-section').classList.add('hidden');
                               document.getElementById('results-section').classList.remove('hidden');
                          }
@@ -678,7 +792,16 @@
                 }
             }, (error) => {
                 console.error("Data Load Error:", error);
-                showToast("Помилка завантаження даних");
+                
+                // FIX: Do not auto-logout on permission denied. Just show toast.
+                if (error.code === 'permission-denied') {
+                    showToast("Не вдалося завантажити дані. Можливо, це новий пристрій.");
+                    // Allow user to use the form
+                    document.getElementById('results-section').classList.add('hidden');
+                    document.getElementById('input-section').classList.remove('hidden');
+                } else {
+                    showToast("Помилка завантаження даних");
+                }
             });
         }
 
@@ -686,6 +809,7 @@
             if (!window.currentUser) return;
             try {
                 const userId = window.currentUser.uid;
+                // Reverting to 'data' collection
                 const userDocRef = window.doc(window.db, 'artifacts', window.appId, 'users', userId, 'data', 'profile');
                 await window.setDoc(userDocRef, dataObj);
             } catch (error) {
@@ -831,11 +955,14 @@
                 renderMetrics(metrics);
                 renderBMI(userDataState.weight, userDataState.height);
                 renderPlan(currentPlan);
+                // Update shopping list cache and render
+                lastShoppingList = JSON.stringify(jsonPlan.shopping_list);
                 renderShoppingList(jsonPlan.shopping_list);
                 renderAdvice(jsonPlan.notes);
 
                 document.getElementById('loading-section').classList.add('hidden');
                 document.getElementById('results-section').classList.remove('hidden');
+                document.getElementById('cancel-btn').classList.add('hidden');
 
             } catch (error) {
                 console.error(error);
@@ -870,13 +997,11 @@
                 const fullData = {
                     userData: userDataState,
                     plan: currentPlan,
-                    shopping_list: document.shoppingListCache || {}, // Need to persist list properly
+                    shopping_list: document.shoppingListCache || {}, 
                     notes: document.notesCache || "",
                     cache: recipeCache
                 };
                 
-                // Fetch existing to not overwrite shopping list if not in memory scope perfectly (simplified for this demo)
-                // Better approach: just update the specific field if possible, or resave full state
                 await saveToCloud(fullData);
 
                 showToast(`Страву оновлено: ${newMeal.name}`);
@@ -931,11 +1056,16 @@
 
         const dayNames = { "monday": "Понеділок", "tuesday": "Вівторок", "wednesday": "Середа", "thursday": "Четвер", "friday": "П'ятниця", "saturday": "Субота", "sunday": "Неділя" };
 
+        const orderedDays = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
+
         function renderPlan(plan) {
             const container = document.getElementById('plan-container');
             container.innerHTML = '';
 
-            for (const [dayKey, dayData] of Object.entries(plan)) {
+            orderedDays.forEach(dayKey => {
+                const dayData = plan[dayKey];
+                if (!dayData) return; // Skip if no data for this day
+
                 const card = document.createElement('div');
                 card.className = 'bg-white rounded-3xl shadow-sm hover:shadow-xl hover:-translate-y-1 transition-all duration-300 overflow-hidden border border-slate-100 flex flex-col h-full';
                 const isWeekend = dayKey === 'saturday' || dayKey === 'sunday';
@@ -953,7 +1083,7 @@
                     </div>
                 `;
                 container.appendChild(card);
-            }
+            });
         }
 
         function renderMealRow(label, iconClass, meal, dayKey, mealType) {
@@ -982,6 +1112,7 @@
         function renderShoppingList(list) {
             document.shoppingListCache = list; // Cache for save
             const container = document.getElementById('shopping-container');
+            const savedStatus = userDataState.shopping_status || {}; // Get saved status
             container.innerHTML = '';
             for (const [category, items] of Object.entries(list)) {
                 if (!items || items.length === 0) continue;
@@ -991,15 +1122,18 @@
                         ${category} <span class="text-xs font-normal text-slate-400 bg-slate-50 px-2 py-1 rounded-full no-print">${items.length}</span>
                     </h4>
                     <div class="space-y-3">
-                        ${items.map(item => `
+                        ${items.map(item => {
+                            const isChecked = savedStatus[item] ? 'checked' : '';
+                            return `
                             <label class="custom-checkbox flex items-start gap-3 cursor-pointer group">
-                                <input type="checkbox" class="hidden peer">
+                                <input type="checkbox" class="hidden peer" ${isChecked} onchange="toggleShopItem('${item.replace(/'/g, "\\'")}')">
                                 <div class="w-5 h-5 rounded-md border-2 border-slate-300 peer-checked:bg-emerald-500 peer-checked:border-emerald-500 flex items-center justify-center transition-all mt-0.5 flex-shrink-0 group-hover:border-emerald-400 no-print">
                                     <svg class="w-3 h-3 text-white hidden pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7"></path></svg>
                                 </div>
                                 <span class="text-sm text-slate-600 font-medium peer-checked:text-slate-400 peer-checked:line-through transition-colors select-none">${item}</span>
                             </label>
-                        `).join('')}
+                        `;
+                        }).join('')}
                     </div>
                 `;
                 container.appendChild(catBlock);
@@ -1009,6 +1143,59 @@
         function renderAdvice(text) { 
             document.notesCache = text;
             document.getElementById('advice-text').innerText = text || "Дотримуйтесь водного балансу."; 
+        }
+
+        // Water tracker function
+        async function updateWater(delta) {
+            if (!window.currentUser) return;
+            
+            // Initialize if not exists
+            if (!userDataState.water) userDataState.water = 0;
+            
+            // Update water count (min 0, max reasonable limit)
+            userDataState.water = Math.max(0, userDataState.water + delta);
+            
+            // Update UI
+            document.getElementById('water-count').innerText = userDataState.water;
+            
+            // Save to cloud
+            try {
+                const userDocRef = window.doc(window.db, 'artifacts', window.appId, 'users', window.currentUser.uid, 'data', 'profile');
+                await window.setDoc(userDocRef, { 
+                    userData: {
+                        ...userDataState,
+                        water: userDataState.water
+                    }
+                }, { merge: true });
+            } catch (e) {
+                console.error("Помилка збереження води", e);
+                showToast("Помилка при збереженні");
+            }
+        }
+
+        // Toggle shopping item status
+        async function toggleShopItem(itemName) {
+            if (!window.currentUser) return;
+            
+            // Initialize if not exists
+            if (!userDataState.shopping_status) userDataState.shopping_status = {};
+            
+            // Toggle status
+            const currentStatus = !!userDataState.shopping_status[itemName];
+            userDataState.shopping_status[itemName] = !currentStatus;
+            
+            // Save to cloud
+            try {
+                const userDocRef = window.doc(window.db, 'artifacts', window.appId, 'users', window.currentUser.uid, 'data', 'profile');
+                await window.setDoc(userDocRef, { 
+                    userData: {
+                        ...userDataState,
+                        shopping_status: userDataState.shopping_status
+                    }
+                }, { merge: true });
+            } catch (e) {
+                console.error("Помилка збереження чекбокса", e);
+            }
         }
 
         function switchTab(tabId) {
